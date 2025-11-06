@@ -3,6 +3,7 @@ using ManokshaApi.Models;
 using ManokshaApi.Services;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.OpenApi.Models;
+using Microsoft.AspNetCore.Http;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -10,10 +11,18 @@ var builder = WebApplication.CreateBuilder(args);
 // 1️⃣ Add Services
 // --------------------
 builder.Services.AddControllers().AddNewtonsoftJson();
-builder.Services.AddDbContext<AppDbContext>(opt => opt.UseInMemoryDatabase("ManokshaDb"));
+
+// ✅ Use SQL Server instead of InMemory database
+builder.Services.AddDbContext<AppDbContext>(options =>
+    options.UseSqlServer(builder.Configuration.GetConnectionString("DefaultConnection")));
+
+// ✅ Dependency Injection for services
 builder.Services.AddScoped<IProductService, ProductService>();
 builder.Services.AddScoped<IEmailService, SmtpEmailService>();
 builder.Services.AddScoped<IPaymentService, RazorpayServiceStub>();
+
+// ✅ Register Firebase Storage Service globally (no constructor arguments)
+builder.Services.AddSingleton<FirebaseStorageService>();
 
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen(c =>
@@ -45,17 +54,17 @@ app.UseHttpsRedirection();
 app.UseAuthorization();
 
 // --------------------
-// 4️⃣ Minimal API Endpoints
+// 4️⃣ Product Endpoints
 // --------------------
 
-// ✅ Unified GET /products (supports search, filter, sort, pagination)
+// GET /products (search, filter, sort, pagination)
 app.MapGet("/products", async (HttpRequest req, IProductService productService) =>
 {
     var search = req.Query["search"].ToString();
     var category = req.Query["category"].ToString();
     decimal.TryParse(req.Query["minPrice"], out var minPrice);
     decimal.TryParse(req.Query["maxPrice"], out var maxPrice);
-    var sort = req.Query["sort"].ToString(); // e.g. price_asc, price_desc, name_asc
+    var sort = req.Query["sort"].ToString();
     int.TryParse(req.Query["page"], out var page);
     int.TryParse(req.Query["pageSize"], out var pageSize);
 
@@ -68,35 +77,62 @@ app.MapGet("/products", async (HttpRequest req, IProductService productService) 
     return Results.Ok(result);
 });
 
-// GET by Id
+// GET /products/{id}
 app.MapGet("/products/{id:guid}", async (Guid id, IProductService productService) =>
 {
     var product = await productService.GetProductByIdAsync(id);
     return product is not null ? Results.Ok(product) : Results.NotFound();
 });
 
-// POST
-app.MapPost("/products", async (Product product, IProductService productService) =>
+// POST /products (multipart/form-data with Firebase image upload)
+app.MapPost("/products", async (HttpRequest req, IProductService productService, FirebaseStorageService firebaseService) =>
 {
+    var form = await req.ReadFormAsync();
+
+    var name = form["name"].ToString();
+    var category = form["category"].ToString();
+    decimal.TryParse(form["price"], out var price);
+    int.TryParse(form["stock"], out var stock);
+    bool.TryParse(form["isActive"], out var isActive);
+
+    var file = form.Files.FirstOrDefault();
+    string imageUrl = "";
+
+    if (file != null && file.Length > 0)
+    {
+        using var stream = file.OpenReadStream();
+        imageUrl = await firebaseService.UploadFileAsync(stream, file.FileName, file.ContentType);
+    }
+
+    var product = new Product
+    {
+        Name = name,
+        Category = category,
+        Price = price,
+        Stock = stock,
+        IsActive = isActive,
+        ImageUrl = imageUrl
+    };
+
     var createdProduct = await productService.CreateProductAsync(product);
     return Results.Created($"/products/{createdProduct.Id}", createdProduct);
 });
 
-// PUT
+// PUT /products/{id}
 app.MapPut("/products/{id:guid}", async (Guid id, Product product, IProductService productService) =>
 {
     var updatedProduct = await productService.UpdateProductAsync(id, product);
     return updatedProduct is not null ? Results.Ok(updatedProduct) : Results.NotFound();
 });
 
-// DELETE
+// DELETE /products/{id}
 app.MapDelete("/products/{id:guid}", async (Guid id, IProductService productService) =>
 {
     var deleted = await productService.DeleteProductAsync(id);
     return deleted ? Results.Ok() : Results.NotFound();
 });
 
-// PATCH → Activate / Deactivate Product
+// PATCH /products/{id}/active
 app.MapPatch("/products/{id:guid}/active", async (Guid id, bool isActive, IProductService productService) =>
 {
     var ok = await productService.SetProductActiveStateAsync(id, isActive);
@@ -104,24 +140,6 @@ app.MapPatch("/products/{id:guid}/active", async (Guid id, bool isActive, IProdu
 });
 
 // --------------------
-// 5️⃣ Seed Sample Data
-// --------------------
-using (var scope = app.Services.CreateScope())
-{
-    var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-
-    if (!db.Products.Any())
-    {
-        db.Products.AddRange(
-            new Product { Name = "Gold Necklace", Category = "Jewelry", Price = 1200, ImageUrl = "https://example.com/gold_necklace.jpg" },
-            new Product { Name = "Silk Saree", Category = "Clothing", Price = 350, ImageUrl = "https://example.com/silk_saree.jpg" },
-            new Product { Name = "Stud Earrings", Category = "Jewelry", Price = 500, ImageUrl = "https://example.com/earrings.jpg" }
-        );
-        db.SaveChanges();
-    }
-}
-
-// --------------------
-// 6️⃣ Run App
+// 5️⃣ Run App
 // --------------------
 app.Run();
