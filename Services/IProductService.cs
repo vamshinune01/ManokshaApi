@@ -8,14 +8,12 @@ namespace ManokshaApi.Services
 {
     public interface IProductService
     {
-        // 🟢 Basic CRUD
         Task<List<Product>> GetAllProductsAsync();
         Task<Product?> GetProductByIdAsync(Guid id);
         Task<Product> CreateProductAsync(Product product);
         Task<Product?> UpdateProductAsync(Guid id, Product product);
-        Task<bool> DeleteProductAsync(Guid id);
+        Task<bool> DeleteProductAsync(Guid id); // ✅ Make sure this line exists exactly like this
 
-        // 🟡 Filtering / Search / Sort / Pagination
         Task<PaginatedResult<Product>> GetProductsAsync(
             string? search,
             string? category,
@@ -25,7 +23,6 @@ namespace ManokshaApi.Services
             int page,
             int pageSize);
 
-        // 🔵 Activate / Deactivate Product
         Task<bool> SetProductActiveStateAsync(Guid id, bool isActive);
     }
 }
