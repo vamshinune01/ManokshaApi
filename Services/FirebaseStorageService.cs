@@ -1,6 +1,6 @@
-﻿using FirebaseAdmin;
-using Google.Apis.Auth.OAuth2;
+﻿using Google.Apis.Auth.OAuth2;
 using Google.Cloud.Storage.V1;
+using FirebaseAdmin;
 using System.IO;
 using System.Threading.Tasks;
 
@@ -13,7 +13,7 @@ namespace ManokshaApi.Services
 
         public FirebaseStorageService()
         {
-            // Initialize Firebase app only once
+            // Initialize Firebase using service account
             if (FirebaseApp.DefaultInstance == null)
             {
                 FirebaseApp.Create(new AppOptions()
@@ -22,12 +22,12 @@ namespace ManokshaApi.Services
                 });
             }
 
-            // ✅ Create StorageClient using the same credentials
+            // ✅ Explicitly create StorageClient using same credentials
             var credential = GoogleCredential.FromFile("firebase-service.json");
             _storageClient = StorageClient.Create(credential);
 
-            // ✅ Your actual bucket name
-            _bucketName = "manoksha-collections.appspot.com";
+            // ✅ Use the exact bucket name you saw in Firebase
+            _bucketName = "manoksha-collections.firebasestorage.app";
         }
 
         public async Task<string> UploadFileAsync(Stream fileStream, string fileName, string contentType)
@@ -39,8 +39,8 @@ namespace ManokshaApi.Services
                 source: fileStream
             );
 
-            // Return public URL
-            return $"https://storage.googleapis.com/{_bucketName}/{obj.Name}";
+            // ✅ Return public download URL
+            return $"https://firebasestorage.googleapis.com/v0/b/{_bucketName}/o/{obj.Name}?alt=media";
         }
     }
 }
