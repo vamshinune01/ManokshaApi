@@ -2,14 +2,22 @@
 using ManokshaApi.Models;
 using ManokshaApi.Services;
 using Microsoft.AspNetCore.Identity.Data;
+using ManokshaApi.DTO;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using System.Security.Cryptography;
 
+
 namespace ManokshaApi.Controllers
 {
+    using MyLoginRequest = ManokshaApi.DTO.LoginRequest;
+    using MyVerifyOtpRequest = ManokshaApi.DTO.VerifyOtpRequest;
+    using ForgotPasswordRequest = ManokshaApi.DTO.ForgotPasswordRequest;
+
     [ApiController]
     [Route("api/users")]
+
+
     public class UserController : ControllerBase
     {
         private readonly AppDbContext _db;
@@ -58,7 +66,7 @@ namespace ManokshaApi.Controllers
 
         // ✅ Verify OTP (for registration or login)
         [HttpPost("verify-otp")]
-        public async Task<IActionResult> VerifyOtp([FromBody] VerifyOtpRequest request)
+        public async Task<IActionResult> VerifyOtp([FromBody] MyVerifyOtpRequest request)
         {
             var user = await _db.Users.FirstOrDefaultAsync(u => u.Mobile == request.Mobile);
 
@@ -77,7 +85,7 @@ namespace ManokshaApi.Controllers
 
         // ✅ Login (resend OTP for existing users)
         [HttpPost("login")]
-        public async Task<IActionResult> Login([FromBody] LoginRequest request)
+        public async Task<IActionResult> Login([FromBody] MyLoginRequest request)
         {
             var user = await _db.Users.FirstOrDefaultAsync(u => u.Mobile == request.Mobile);
             if (user == null)
