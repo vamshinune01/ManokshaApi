@@ -1,12 +1,9 @@
 ﻿using ManokshaApi.Data;
 using ManokshaApi.Models;
 using ManokshaApi.Services;
-using Microsoft.AspNetCore.Identity.Data;
-using ManokshaApi.DTO;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using System.Security.Cryptography;
-
 
 namespace ManokshaApi.Controllers
 {
@@ -16,19 +13,19 @@ namespace ManokshaApi.Controllers
 
     [ApiController]
     [Route("api/users")]
-
-
     public class UserController : ControllerBase
     {
         private readonly AppDbContext _db;
         private readonly IEmailService _email;
         private readonly ISmsService _sms;
+        private readonly ILogger<UserController> _logger;
 
-        public UserController(AppDbContext db, IEmailService email, ISmsService sms)
+        public UserController(AppDbContext db, IEmailService email, ISmsService sms, ILogger<UserController> logger)
         {
             _db = db;
             _email = email;
             _sms = sms;
+            _logger = logger;
         }
 
         // ✅ Register new user
@@ -53,14 +50,12 @@ namespace ManokshaApi.Controllers
             _db.Users.Add(user);
             await _db.SaveChangesAsync();
 
-            // Send OTP via SMS
+            // Send OTP
             await _sms.SendSmsAsync(user.Mobile, $"Your Manoksha verification code is {user.Otp}");
-
-            // Send OTP via Email if available
             if (!string.IsNullOrEmpty(user.Email))
-                await _email.SendEmailAsync(user.Email, "OTP Verification - Manoksha Collections",
-                    $"Your OTP is {user.Otp}");
+                await _email.SendEmailAsync(user.Email, "OTP Verification - Manoksha Collections", $"Your OTP is {user.Otp}");
 
+            _logger.LogInformation("✅ New user registered with Mobile: {Mobile}", user.Mobile);
             return Ok(new { message = "User registered. OTP sent to mobile and email.", userId = user.Id });
         }
 
@@ -71,15 +66,22 @@ namespace ManokshaApi.Controllers
             var user = await _db.Users.FirstOrDefaultAsync(u => u.Mobile == request.Mobile);
 
             if (user == null)
+            {
+                _logger.LogWarning("❌ OTP verification failed: User not found for {Mobile}", request.Mobile);
                 return NotFound("User not found.");
+            }
 
             if (user.Otp != request.Otp || user.OtpExpiry < DateTime.UtcNow)
+            {
+                _logger.LogWarning("❌ Invalid or expired OTP for {Mobile}", request.Mobile);
                 return BadRequest("Invalid or expired OTP.");
+            }
 
             user.IsEmailConfirmed = true;
             user.Otp = null;
             await _db.SaveChangesAsync();
 
+            _logger.LogInformation("✅ OTP verified for {Mobile}", request.Mobile);
             return Ok(new { message = "OTP verified successfully.", userId = user.Id });
         }
 
@@ -89,7 +91,10 @@ namespace ManokshaApi.Controllers
         {
             var user = await _db.Users.FirstOrDefaultAsync(u => u.Mobile == request.Mobile);
             if (user == null)
+            {
+                _logger.LogWarning("❌ Login attempt for unregistered mobile {Mobile}", request.Mobile);
                 return NotFound("User not registered.");
+            }
 
             user.Otp = GenerateOtp();
             user.OtpExpiry = DateTime.UtcNow.AddMinutes(10);
@@ -97,9 +102,9 @@ namespace ManokshaApi.Controllers
 
             await _sms.SendSmsAsync(user.Mobile, $"Your login OTP is {user.Otp}");
             if (!string.IsNullOrEmpty(user.Email))
-                await _email.SendEmailAsync(user.Email, "Login OTP - Manoksha Collections",
-                    $"Your login OTP is {user.Otp}");
+                await _email.SendEmailAsync(user.Email, "Login OTP - Manoksha Collections", $"Your login OTP is {user.Otp}");
 
+            _logger.LogInformation("✅ Login OTP sent to {Mobile}", request.Mobile);
             return Ok(new { message = "OTP sent for login verification.", userId = user.Id });
         }
 
@@ -109,7 +114,10 @@ namespace ManokshaApi.Controllers
         {
             var user = await _db.Users.FirstOrDefaultAsync(u => u.Mobile == request.Mobile || u.Email == request.Email);
             if (user == null)
+            {
+                _logger.LogWarning("❌ Forgot password failed: No user for {Mobile}/{Email}", request.Mobile, request.Email);
                 return NotFound("User not found.");
+            }
 
             user.Otp = GenerateOtp();
             user.OtpExpiry = DateTime.UtcNow.AddMinutes(10);
@@ -117,9 +125,9 @@ namespace ManokshaApi.Controllers
 
             await _sms.SendSmsAsync(user.Mobile, $"Your password reset OTP is {user.Otp}");
             if (!string.IsNullOrEmpty(user.Email))
-                await _email.SendEmailAsync(user.Email, "Password Reset - Manoksha Collections",
-                    $"Your OTP to reset password is {user.Otp}");
+                await _email.SendEmailAsync(user.Email, "Password Reset - Manoksha Collections", $"Your OTP to reset password is {user.Otp}");
 
+            _logger.LogInformation("✅ Forgot password OTP sent to {Mobile}", request.Mobile);
             return Ok(new { message = "OTP sent for password reset.", userId = user.Id });
         }
 

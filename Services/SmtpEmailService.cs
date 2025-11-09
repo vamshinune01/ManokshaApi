@@ -1,4 +1,5 @@
 ﻿using MailKit.Net.Smtp;
+using MailKit.Security;
 using MimeKit;
 
 namespace ManokshaApi.Services
@@ -6,7 +7,13 @@ namespace ManokshaApi.Services
     public class SmtpEmailService : IEmailService
     {
         private readonly IConfiguration _config;
-        public SmtpEmailService(IConfiguration config) { _config = config; }
+        private readonly ILogger<SmtpEmailService> _logger;
+
+        public SmtpEmailService(IConfiguration config, ILogger<SmtpEmailService> logger)
+        {
+            _config = config;
+            _logger = logger;
+        }
 
         public async Task SendEmailAsync(string toEmail, string subject, string htmlBody)
         {
@@ -22,12 +29,39 @@ namespace ManokshaApi.Services
             msg.Subject = subject;
             msg.Body = new TextPart("html") { Text = htmlBody };
 
-            using var client = new SmtpClient();
-            await client.ConnectAsync(smtpHost, smtpPort, MailKit.Security.SecureSocketOptions.StartTls);
-            if (!string.IsNullOrEmpty(smtpUser))
-                await client.AuthenticateAsync(smtpUser, smtpPass);
-            await client.SendAsync(msg);
-            await client.DisconnectAsync(true);
+            int maxRetries = 3;
+            int delayMs = 2000;
+
+            for (int attempt = 1; attempt <= maxRetries; attempt++)
+            {
+                try
+                {
+                    using var client = new SmtpClient();
+                    await client.ConnectAsync(smtpHost, smtpPort, SecureSocketOptions.StartTls);
+
+                    if (!string.IsNullOrEmpty(smtpUser))
+                        await client.AuthenticateAsync(smtpUser, smtpPass);
+
+                    await client.SendAsync(msg);
+                    await client.DisconnectAsync(true);
+
+                    _logger.LogInformation($"✅ Email sent successfully to {toEmail}");
+                    return;
+                }
+                catch (AuthenticationException ex)
+                {
+                    _logger.LogError($"❌ Authentication failed: {ex.Message}. Check App Password or 2FA settings.");
+                    throw;
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError($"❌ Error sending email (Attempt {attempt}/{maxRetries}): {ex.Message}");
+                    if (attempt < maxRetries)
+                        await Task.Delay(delayMs);
+                    else
+                        throw;
+                }
+            }
         }
     }
 }

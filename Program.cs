@@ -10,17 +10,18 @@ var builder = WebApplication.CreateBuilder(args);
 // --------------------
 builder.Services.AddControllers().AddNewtonsoftJson();
 
-// SQL Server
+// ✅ SQL Server
 builder.Services.AddDbContext<AppDbContext>(options =>
     options.UseSqlServer(builder.Configuration.GetConnectionString("DefaultConnection")));
 
-// Dependency Injection
+// ✅ Dependency Injection
 builder.Services.AddScoped<IProductService, ProductService>();
 builder.Services.AddScoped<IEmailService, SmtpEmailService>();
 builder.Services.AddScoped<IPaymentService, RazorpayServiceStub>();
+builder.Services.AddScoped<ISmsService, SmsService>();
 builder.Services.AddSingleton<FirebaseStorageService>();
 
-// Swagger
+// ✅ Swagger configuration
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen(c =>
 {
@@ -32,19 +33,42 @@ builder.Services.AddSwaggerGen(c =>
     });
 });
 
-// --------------------
-// 2️⃣ Build App
-// --------------------
+// ✅ Add Logging
+builder.Logging.ClearProviders();
+builder.Logging.AddConsole();
+builder.Logging.AddDebug();
+
 var app = builder.Build();
 
 // --------------------
-// 3️⃣ Middleware
+// 2️⃣ Global Exception Handling Middleware
+// --------------------
+app.UseExceptionHandler(errorApp =>
+{
+    errorApp.Run(async context =>
+    {
+        context.Response.StatusCode = 500;
+        context.Response.ContentType = "application/json";
+
+        var error = context.Features.Get<Microsoft.AspNetCore.Diagnostics.IExceptionHandlerFeature>()?.Error;
+        var response = new
+        {
+            message = "Internal server error occurred.",
+            detail = error?.Message
+        };
+
+        await context.Response.WriteAsJsonAsync(response);
+    });
+});
+
+// --------------------
+// 3️⃣ Swagger Middleware
 // --------------------
 app.UseSwagger();
 app.UseSwaggerUI(c =>
 {
     c.SwaggerEndpoint("/swagger/v1/swagger.json", "Manoksha Mini Catalog API v1");
-    c.RoutePrefix = string.Empty;
+    c.RoutePrefix = string.Empty; // Swagger at root
 });
 
 app.UseHttpsRedirection();
@@ -53,7 +77,7 @@ app.UseAuthorization();
 // --------------------
 // 4️⃣ Map Controllers
 // --------------------
-app.MapControllers(); // <-- This is enough for UsersController, ProductController, ReturnController, etc.
+app.MapControllers();
 
 // --------------------
 // 5️⃣ Run App

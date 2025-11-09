@@ -1,5 +1,6 @@
 ﻿using ManokshaApi.Data;
 using ManokshaApi.Models;
+using ManokshaApi.Services;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 
@@ -10,10 +11,12 @@ namespace ManokshaApi.Controllers
     public class ProductController : ControllerBase
     {
         private readonly AppDbContext _db;
+        private readonly FirebaseStorageService _firebaseService;
 
-        public ProductController(AppDbContext db)
+        public ProductController(AppDbContext db, FirebaseStorageService firebaseService)
         {
             _db = db;
+            _firebaseService = firebaseService;
         }
 
         // ✅ Get all active products
@@ -33,13 +36,35 @@ namespace ManokshaApi.Controllers
             return Ok(product);
         }
 
-        // ✅ Create product (admin)
+        // ✅ Create product (with local image upload)
         [HttpPost]
-        public async Task<IActionResult> Create([FromBody] Product product)
+        [RequestSizeLimit(10_000_000)] // limit 10MB
+        public async Task<IActionResult> Create([FromForm] ProductUploadRequest request)
         {
-            product.Id = Guid.NewGuid();
+            if (request.File == null || request.File.Length == 0)
+                return BadRequest("Image file is required.");
+
+            // Upload file to Firebase
+            string imageUrl;
+            using (var stream = request.File.OpenReadStream())
+            {
+                imageUrl = await _firebaseService.UploadFileAsync(stream, request.File.FileName, request.File.ContentType);
+            }
+
+            var product = new Product
+            {
+                Id = Guid.NewGuid(),
+                Name = request.Name,
+                Category = request.Category,
+                Price = request.Price,
+                Stock = request.Stock,
+                IsActive = request.IsActive,
+                ImageUrl = imageUrl
+            };
+
             _db.Products.Add(product);
             await _db.SaveChangesAsync();
+
             return CreatedAtAction(nameof(Get), new { id = product.Id }, product);
         }
 
@@ -84,5 +109,16 @@ namespace ManokshaApi.Controllers
             await _db.SaveChangesAsync();
             return NoContent();
         }
+    }
+
+    // DTO for multipart/form-data
+    public class ProductUploadRequest
+    {
+        public string Name { get; set; }
+        public string Category { get; set; }
+        public decimal Price { get; set; }
+        public int Stock { get; set; }
+        public bool IsActive { get; set; }
+        public IFormFile File { get; set; } // uploaded file
     }
 }
