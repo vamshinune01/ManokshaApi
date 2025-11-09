@@ -5,54 +5,84 @@ using Microsoft.EntityFrameworkCore;
 
 namespace ManokshaApi.Controllers
 {
-    [ApiController, Route("api/products")]
+    [ApiController]
+    [Route("api/products")]
     public class ProductController : ControllerBase
     {
         private readonly AppDbContext _db;
-        public ProductController(AppDbContext db) { _db = db; }
 
+        public ProductController(AppDbContext db)
+        {
+            _db = db;
+        }
+
+        // ✅ Get all active products
         [HttpGet]
-        public async Task<IActionResult> GetAll() => Ok(await _db.Products.Where(p => p.IsActive).ToListAsync());
+        public async Task<IActionResult> GetAll()
+        {
+            var products = await _db.Products.Where(p => p.IsActive).ToListAsync();
+            return Ok(products);
+        }
 
+        // ✅ Get product by ID
         [HttpGet("{id:guid}")]
         public async Task<IActionResult> Get(Guid id)
         {
-            var p = await _db.Products.FindAsync(id);
-            if (p == null) return NotFound();
-            return Ok(p);
+            var product = await _db.Products.FindAsync(id);
+            if (product == null) return NotFound();
+            return Ok(product);
         }
 
-        [HttpPost] // Admin create
-        public async Task<IActionResult> Create([FromBody] Product p)
+        // ✅ Create product (admin)
+        [HttpPost]
+        public async Task<IActionResult> Create([FromBody] Product product)
         {
-            _db.Products.Add(p);
+            product.Id = Guid.NewGuid();
+            _db.Products.Add(product);
             await _db.SaveChangesAsync();
-            return Ok(p);
+            return CreatedAtAction(nameof(Get), new { id = product.Id }, product);
         }
 
+        // ✅ Update product
         [HttpPut("{id:guid}")]
         public async Task<IActionResult> Update(Guid id, [FromBody] Product incoming)
         {
-            var p = await _db.Products.FindAsync(id);
-            if (p == null) return NotFound();
-            p.Name = incoming.Name;
-            p.Price = incoming.Price;
-            p.Category = incoming.Category;
-            p.ImageUrl = incoming.ImageUrl;
-            p.IsActive = incoming.IsActive;
-            p.Stock = incoming.Stock;
+            var product = await _db.Products.FindAsync(id);
+            if (product == null) return NotFound();
+
+            product.Name = incoming.Name;
+            product.Price = incoming.Price;
+            product.Category = incoming.Category;
+            product.ImageUrl = incoming.ImageUrl;
+            product.IsActive = incoming.IsActive;
+            product.Stock = incoming.Stock;
+
             await _db.SaveChangesAsync();
-            return Ok(p);
+            return Ok(product);
         }
 
+        // ✅ Soft delete product
         [HttpDelete("{id:guid}")]
         public async Task<IActionResult> Delete(Guid id)
         {
-            var p = await _db.Products.FindAsync(id);
-            if (p == null) return NotFound();
-            p.IsActive = false;
+            var product = await _db.Products.FindAsync(id);
+            if (product == null) return NotFound();
+
+            product.IsActive = false;
             await _db.SaveChangesAsync();
-            return Ok();
+            return Ok(new { message = "Product deactivated successfully." });
+        }
+
+        // ✅ Toggle active state
+        [HttpPatch("{id:guid}/active")]
+        public async Task<IActionResult> SetActiveState(Guid id, [FromQuery] bool isActive)
+        {
+            var product = await _db.Products.FindAsync(id);
+            if (product == null) return NotFound();
+
+            product.IsActive = isActive;
+            await _db.SaveChangesAsync();
+            return NoContent();
         }
     }
 }
