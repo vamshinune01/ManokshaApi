@@ -1,85 +1,80 @@
 ﻿using ManokshaApi.Data;
 using ManokshaApi.Services;
+using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.IdentityModel.Tokens;
 using Microsoft.OpenApi.Models;
+using System.Text;
 
 var builder = WebApplication.CreateBuilder(args);
 
-// --------------------
-// 1️⃣ Add Services
-// --------------------
 builder.Services.AddControllers().AddNewtonsoftJson();
 
-// ✅ SQL Server
+// DbContext
 builder.Services.AddDbContext<AppDbContext>(options =>
     options.UseSqlServer(builder.Configuration.GetConnectionString("DefaultConnection")));
 
-// ✅ Dependency Injection
-builder.Services.AddScoped<IProductService, ProductService>();
+// Services
 builder.Services.AddScoped<IEmailService, SmtpEmailService>();
-builder.Services.AddScoped<IPaymentService, RazorpayServiceStub>();
 builder.Services.AddScoped<ISmsService, SmsService>();
-builder.Services.AddSingleton<FirebaseStorageService>();
+builder.Services.AddScoped<FirebaseStorageService>();
+builder.Services.AddScoped<JwtService>();
 
-// ✅ Swagger configuration
+// JWT Config
+var jwtKey = Environment.GetEnvironmentVariable("JWT_SECRET_KEY") ?? throw new Exception("JWT_SECRET_KEY not found");
+var key = Encoding.ASCII.GetBytes(jwtKey);
+
+builder.Services.AddAuthentication(options =>
+{
+    options.DefaultAuthenticateScheme = JwtBearerDefaults.AuthenticationScheme;
+    options.DefaultChallengeScheme = JwtBearerDefaults.AuthenticationScheme;
+})
+.AddJwtBearer(options =>
+{
+    options.RequireHttpsMetadata = false;
+    options.SaveToken = true;
+    options.TokenValidationParameters = new TokenValidationParameters
+    {
+        ValidateIssuerSigningKey = true,
+        IssuerSigningKey = new SymmetricSecurityKey(key),
+        ValidateIssuer = false,
+        ValidateAudience = false,
+        ClockSkew = TimeSpan.Zero
+    };
+});
+
+// Swagger
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen(c =>
 {
-    c.SwaggerDoc("v1", new OpenApiInfo
+    c.SwaggerDoc("v1", new OpenApiInfo { Title = "Manoksha API", Version = "v1" });
+
+    c.AddSecurityDefinition("Bearer", new OpenApiSecurityScheme
     {
-        Title = "Manoksha Mini Catalog API",
-        Version = "v1",
-        Description = "API for Mini Product Catalog - Manoksha Collections"
+        In = ParameterLocation.Header,
+        Description = "Enter 'Bearer {token}'",
+        Name = "Authorization",
+        Type = SecuritySchemeType.ApiKey
+    });
+    c.AddSecurityRequirement(new OpenApiSecurityRequirement
+    {
+        {
+            new OpenApiSecurityScheme
+            {
+                Reference = new OpenApiReference { Type = ReferenceType.SecurityScheme, Id = "Bearer" }
+            },
+            new string[] {}
+        }
     });
 });
-
-// ✅ Add Logging
-builder.Logging.ClearProviders();
-builder.Logging.AddConsole();
-builder.Logging.AddDebug();
 
 var app = builder.Build();
-
-// --------------------
-// 2️⃣ Global Exception Handling Middleware
-// --------------------
-app.UseExceptionHandler(errorApp =>
-{
-    errorApp.Run(async context =>
-    {
-        context.Response.StatusCode = 500;
-        context.Response.ContentType = "application/json";
-
-        var error = context.Features.Get<Microsoft.AspNetCore.Diagnostics.IExceptionHandlerFeature>()?.Error;
-        var response = new
-        {
-            message = "Internal server error occurred.",
-            detail = error?.Message
-        };
-
-        await context.Response.WriteAsJsonAsync(response);
-    });
-});
-
-// --------------------
-// 3️⃣ Swagger Middleware
-// --------------------
 app.UseSwagger();
-app.UseSwaggerUI(c =>
-{
-    c.SwaggerEndpoint("/swagger/v1/swagger.json", "Manoksha Mini Catalog API v1");
-    c.RoutePrefix = string.Empty; // Swagger at root
-});
+app.UseSwaggerUI();
 
 app.UseHttpsRedirection();
+app.UseAuthentication();
 app.UseAuthorization();
 
-// --------------------
-// 4️⃣ Map Controllers
-// --------------------
 app.MapControllers();
-
-// --------------------
-// 5️⃣ Run App
-// --------------------
 app.Run();

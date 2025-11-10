@@ -1,16 +1,13 @@
 ﻿using ManokshaApi.Data;
 using ManokshaApi.Models;
 using ManokshaApi.Services;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using System.Security.Cryptography;
 
 namespace ManokshaApi.Controllers
 {
-    using MyLoginRequest = ManokshaApi.DTO.LoginRequest;
-    using MyVerifyOtpRequest = ManokshaApi.DTO.VerifyOtpRequest;
-    using ForgotPasswordRequest = ManokshaApi.DTO.ForgotPasswordRequest;
-
     [ApiController]
     [Route("api/users")]
     public class UserController : ControllerBase
@@ -18,124 +15,116 @@ namespace ManokshaApi.Controllers
         private readonly AppDbContext _db;
         private readonly IEmailService _email;
         private readonly ISmsService _sms;
+        private readonly JwtService _jwt;
         private readonly ILogger<UserController> _logger;
 
-        public UserController(AppDbContext db, IEmailService email, ISmsService sms, ILogger<UserController> logger)
+        public UserController(AppDbContext db, IEmailService email, ISmsService sms, JwtService jwt, ILogger<UserController> logger)
         {
             _db = db;
             _email = email;
             _sms = sms;
+            _jwt = jwt;
             _logger = logger;
         }
 
-        // ✅ Register new user
+        // ✅ Register Customer
         [HttpPost("register")]
         public async Task<IActionResult> Register([FromBody] User user)
         {
-            if (string.IsNullOrWhiteSpace(user.Mobile))
-                return BadRequest("Mobile number is required.");
-
             if (await _db.Users.AnyAsync(u => u.Mobile == user.Mobile))
                 return BadRequest("Mobile number already registered.");
 
-            if (!string.IsNullOrWhiteSpace(user.Email) &&
-                await _db.Users.AnyAsync(u => u.Email == user.Email))
-                return BadRequest("Email already registered.");
-
             user.Id = Guid.NewGuid();
-            user.IsEmailConfirmed = false;
+            user.Role = "Customer";
+            user.IsActive = true;
             user.Otp = GenerateOtp();
             user.OtpExpiry = DateTime.UtcNow.AddMinutes(10);
 
             _db.Users.Add(user);
             await _db.SaveChangesAsync();
 
-            // Send OTP
-            await _sms.SendSmsAsync(user.Mobile, $"Your Manoksha verification code is {user.Otp}");
+            await _sms.SendSmsAsync(user.Mobile, $"Your OTP is {user.Otp}");
             if (!string.IsNullOrEmpty(user.Email))
-                await _email.SendEmailAsync(user.Email, "OTP Verification - Manoksha Collections", $"Your OTP is {user.Otp}");
+                await _email.SendEmailAsync(user.Email, "OTP Verification", $"Your OTP is {user.Otp}");
 
-            _logger.LogInformation("✅ New user registered with Mobile: {Mobile}", user.Mobile);
-            return Ok(new { message = "User registered. OTP sent to mobile and email.", userId = user.Id });
+            return Ok(new { message = "Registered successfully. OTP sent." });
         }
 
-        // ✅ Verify OTP (for registration or login)
+        // ✅ Verify OTP and return JWT
         [HttpPost("verify-otp")]
-        public async Task<IActionResult> VerifyOtp([FromBody] MyVerifyOtpRequest request)
+        public async Task<IActionResult> VerifyOtp([FromBody] DTO.VerifyOtpRequest request)
         {
             var user = await _db.Users.FirstOrDefaultAsync(u => u.Mobile == request.Mobile);
-
-            if (user == null)
-            {
-                _logger.LogWarning("❌ OTP verification failed: User not found for {Mobile}", request.Mobile);
-                return NotFound("User not found.");
-            }
+            if (user == null) return NotFound("User not found.");
+            if (!user.IsActive) return BadRequest("Account deactivated.");
 
             if (user.Otp != request.Otp || user.OtpExpiry < DateTime.UtcNow)
-            {
-                _logger.LogWarning("❌ Invalid or expired OTP for {Mobile}", request.Mobile);
                 return BadRequest("Invalid or expired OTP.");
-            }
 
-            user.IsEmailConfirmed = true;
             user.Otp = null;
+            user.IsEmailConfirmed = true;
+
+            var accessToken = _jwt.GenerateToken(user);
+            var refreshToken = _jwt.GenerateRefreshToken();
+            user.RefreshToken = refreshToken;
+            user.RefreshTokenExpiry = DateTime.UtcNow.AddDays(7);
+
             await _db.SaveChangesAsync();
 
-            _logger.LogInformation("✅ OTP verified for {Mobile}", request.Mobile);
-            return Ok(new { message = "OTP verified successfully.", userId = user.Id });
+            return Ok(new { accessToken, refreshToken, role = user.Role });
         }
 
-        // ✅ Login (resend OTP for existing users)
-        [HttpPost("login")]
-        public async Task<IActionResult> Login([FromBody] MyLoginRequest request)
+        // ✅ Refresh token
+        [HttpPost("refresh-token")]
+        public async Task<IActionResult> RefreshToken([FromBody] string refreshToken)
         {
-            var user = await _db.Users.FirstOrDefaultAsync(u => u.Mobile == request.Mobile);
-            if (user == null)
-            {
-                _logger.LogWarning("❌ Login attempt for unregistered mobile {Mobile}", request.Mobile);
-                return NotFound("User not registered.");
-            }
+            var user = await _db.Users.FirstOrDefaultAsync(u => u.RefreshToken == refreshToken);
+            if (user == null || user.RefreshTokenExpiry < DateTime.UtcNow)
+                return Unauthorized("Invalid or expired refresh token.");
 
-            user.Otp = GenerateOtp();
-            user.OtpExpiry = DateTime.UtcNow.AddMinutes(10);
+            var newAccessToken = _jwt.GenerateToken(user);
+            var newRefreshToken = _jwt.GenerateRefreshToken();
+            user.RefreshToken = newRefreshToken;
+            user.RefreshTokenExpiry = DateTime.UtcNow.AddDays(7);
             await _db.SaveChangesAsync();
 
-            await _sms.SendSmsAsync(user.Mobile, $"Your login OTP is {user.Otp}");
-            if (!string.IsNullOrEmpty(user.Email))
-                await _email.SendEmailAsync(user.Email, "Login OTP - Manoksha Collections", $"Your login OTP is {user.Otp}");
-
-            _logger.LogInformation("✅ Login OTP sent to {Mobile}", request.Mobile);
-            return Ok(new { message = "OTP sent for login verification.", userId = user.Id });
+            return Ok(new { accessToken = newAccessToken, refreshToken = newRefreshToken });
         }
 
-        // ✅ Forgot Password (same OTP flow)
-        [HttpPost("forgot-password")]
-        public async Task<IActionResult> ForgotPassword([FromBody] ForgotPasswordRequest request)
+        // ✅ SuperAdmin: Add new Worker
+        [Authorize(Roles = "SuperAdmin")]
+        [HttpPost("add-worker")]
+        public async Task<IActionResult> AddWorker([FromBody] User worker)
         {
-            var user = await _db.Users.FirstOrDefaultAsync(u => u.Mobile == request.Mobile || u.Email == request.Email);
-            if (user == null)
-            {
-                _logger.LogWarning("❌ Forgot password failed: No user for {Mobile}/{Email}", request.Mobile, request.Email);
-                return NotFound("User not found.");
-            }
+            if (await _db.Users.AnyAsync(u => u.Mobile == worker.Mobile))
+                return BadRequest("Worker mobile already registered.");
 
-            user.Otp = GenerateOtp();
-            user.OtpExpiry = DateTime.UtcNow.AddMinutes(10);
+            worker.Id = Guid.NewGuid();
+            worker.Role = "Worker";
+            worker.IsActive = true;
+            _db.Users.Add(worker);
             await _db.SaveChangesAsync();
 
-            await _sms.SendSmsAsync(user.Mobile, $"Your password reset OTP is {user.Otp}");
-            if (!string.IsNullOrEmpty(user.Email))
-                await _email.SendEmailAsync(user.Email, "Password Reset - Manoksha Collections", $"Your OTP to reset password is {user.Otp}");
-
-            _logger.LogInformation("✅ Forgot password OTP sent to {Mobile}", request.Mobile);
-            return Ok(new { message = "OTP sent for password reset.", userId = user.Id });
+            return Ok(new { message = "Worker added successfully." });
         }
 
-        // ✅ Helper: Generate Random OTP
-        private string GenerateOtp()
+        // ✅ SuperAdmin: Remove Worker
+        [Authorize(Roles = "SuperAdmin")]
+        [HttpDelete("remove-worker/{mobile}")]
+        public async Task<IActionResult> RemoveWorker(string mobile)
         {
-            var random = RandomNumberGenerator.GetInt32(100000, 999999);
-            return random.ToString();
+            var user = await _db.Users.FirstOrDefaultAsync(u => u.Mobile == mobile && u.Role == "Worker");
+            if (user == null) return NotFound("Worker not found.");
+
+            user.IsActive = false;
+            user.RefreshToken = null;
+            await _db.SaveChangesAsync();
+
+            return Ok(new { message = "Worker removed and access revoked." });
         }
+
+        // ✅ Helper: Generate OTP
+        private string GenerateOtp() =>
+            RandomNumberGenerator.GetInt32(100000, 999999).ToString();
     }
 }

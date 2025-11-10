@@ -1,6 +1,7 @@
 ﻿using ManokshaApi.Data;
 using ManokshaApi.Models;
 using ManokshaApi.Services;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 
@@ -19,7 +20,6 @@ namespace ManokshaApi.Controllers
             _firebaseService = firebaseService;
         }
 
-        // ✅ Get all active products
         [HttpGet]
         public async Task<IActionResult> GetAll()
         {
@@ -27,7 +27,6 @@ namespace ManokshaApi.Controllers
             return Ok(products);
         }
 
-        // ✅ Get product by ID
         [HttpGet("{id:guid}")]
         public async Task<IActionResult> Get(Guid id)
         {
@@ -36,15 +35,14 @@ namespace ManokshaApi.Controllers
             return Ok(product);
         }
 
-        // ✅ Create product (with local image upload)
         [HttpPost]
-        [RequestSizeLimit(10_000_000)] // limit 10MB
+        [Authorize]
+        [RequestSizeLimit(10_000_000)]
         public async Task<IActionResult> Create([FromForm] ProductUploadRequest request)
         {
             if (request.File == null || request.File.Length == 0)
                 return BadRequest("Image file is required.");
 
-            // Upload file to Firebase
             string imageUrl;
             using (var stream = request.File.OpenReadStream())
             {
@@ -68,8 +66,8 @@ namespace ManokshaApi.Controllers
             return CreatedAtAction(nameof(Get), new { id = product.Id }, product);
         }
 
-        // ✅ Update product
         [HttpPut("{id:guid}")]
+        [Authorize]
         public async Task<IActionResult> Update(Guid id, [FromBody] Product incoming)
         {
             var product = await _db.Products.FindAsync(id);
@@ -86,8 +84,8 @@ namespace ManokshaApi.Controllers
             return Ok(product);
         }
 
-        // ✅ Soft delete product
         [HttpDelete("{id:guid}")]
+        [Authorize]
         public async Task<IActionResult> Delete(Guid id)
         {
             var product = await _db.Products.FindAsync(id);
@@ -98,8 +96,8 @@ namespace ManokshaApi.Controllers
             return Ok(new { message = "Product deactivated successfully." });
         }
 
-        // ✅ Toggle active state
         [HttpPatch("{id:guid}/active")]
+        [Authorize]
         public async Task<IActionResult> SetActiveState(Guid id, [FromQuery] bool isActive)
         {
             var product = await _db.Products.FindAsync(id);
@@ -111,7 +109,6 @@ namespace ManokshaApi.Controllers
         }
     }
 
-    // DTO for multipart/form-data
     public class ProductUploadRequest
     {
         public string Name { get; set; }
@@ -119,6 +116,6 @@ namespace ManokshaApi.Controllers
         public decimal Price { get; set; }
         public int Stock { get; set; }
         public bool IsActive { get; set; }
-        public IFormFile File { get; set; } // uploaded file
+        public IFormFile File { get; set; }
     }
 }
