@@ -1,4 +1,5 @@
 ﻿using ManokshaApi.Data;
+using ManokshaApi.DTO;
 using ManokshaApi.Models;
 using ManokshaApi.Services;
 using Microsoft.AspNetCore.Authorization;
@@ -12,41 +13,69 @@ namespace ManokshaApi.Controllers
     public class ProductController : ControllerBase
     {
         private readonly AppDbContext _db;
-        private readonly FirebaseStorageService _firebaseService;
+        private readonly FirebaseStorageService _firebase;
 
-        public ProductController(AppDbContext db, FirebaseStorageService firebaseService)
+        public ProductController(AppDbContext db, FirebaseStorageService firebase)
         {
             _db = db;
-            _firebaseService = firebaseService;
+            _firebase = firebase;
         }
 
+        // ---------------------------
+        // Get all active products
+        // ---------------------------
+        [Authorize(Roles = "Customer,Worker,SuperAdmin")]
         [HttpGet]
         public async Task<IActionResult> GetAll()
         {
             var products = await _db.Products.Where(p => p.IsActive).ToListAsync();
-            return Ok(products);
+
+            return Ok(products.Select(p => new ProductResponse
+            {
+                Id = p.Id,
+                Name = p.Name,
+                Category = p.Category,
+                Price = p.Price,
+                Stock = p.Stock,
+                IsActive = p.IsActive,
+                ImageUrl = p.ImageUrl
+            }));
         }
 
+        // ---------------------------
+        // Get product by Id
+        // ---------------------------
+        [Authorize(Roles = "Customer,Worker,SuperAdmin")]
         [HttpGet("{id:guid}")]
         public async Task<IActionResult> Get(Guid id)
         {
-            var product = await _db.Products.FindAsync(id);
-            if (product == null) return NotFound();
-            return Ok(product);
+            var p = await _db.Products.FindAsync(id);
+            if (p == null) return NotFound();
+
+            return Ok(new ProductResponse
+            {
+                Id = p.Id,
+                Name = p.Name,
+                Category = p.Category,
+                Price = p.Price,
+                Stock = p.Stock,
+                IsActive = p.IsActive,
+                ImageUrl = p.ImageUrl
+            });
         }
 
+        // ---------------------------
+        // Create product (Worker/SuperAdmin)
+        // ---------------------------
+        [Authorize(Roles = "Worker,SuperAdmin")]
         [HttpPost]
-        [Authorize]
         [RequestSizeLimit(10_000_000)]
         public async Task<IActionResult> Create([FromForm] ProductUploadRequest request)
         {
-            if (request.File == null || request.File.Length == 0)
-                return BadRequest("Image file is required.");
-
             string imageUrl;
             using (var stream = request.File.OpenReadStream())
             {
-                imageUrl = await _firebaseService.UploadFileAsync(stream, request.File.FileName, request.File.ContentType);
+                imageUrl = await _firebase.UploadFileAsync(stream, request.File.FileName, request.File.ContentType);
             }
 
             var product = new Product
@@ -63,29 +92,53 @@ namespace ManokshaApi.Controllers
             _db.Products.Add(product);
             await _db.SaveChangesAsync();
 
-            return CreatedAtAction(nameof(Get), new { id = product.Id }, product);
+            return CreatedAtAction(nameof(Get), new { id = product.Id }, new ProductResponse
+            {
+                Id = product.Id,
+                Name = product.Name,
+                Category = product.Category,
+                Price = product.Price,
+                Stock = product.Stock,
+                IsActive = product.IsActive,
+                ImageUrl = product.ImageUrl
+            });
         }
 
+        // ---------------------------
+        // Update product (Worker/SuperAdmin)
+        // ---------------------------
+        [Authorize(Roles = "Worker,SuperAdmin")]
         [HttpPut("{id:guid}")]
-        [Authorize]
-        public async Task<IActionResult> Update(Guid id, [FromBody] Product incoming)
+        public async Task<IActionResult> Update(Guid id, [FromBody] ProductRequest request)
         {
             var product = await _db.Products.FindAsync(id);
             if (product == null) return NotFound();
 
-            product.Name = incoming.Name;
-            product.Price = incoming.Price;
-            product.Category = incoming.Category;
-            product.ImageUrl = incoming.ImageUrl;
-            product.IsActive = incoming.IsActive;
-            product.Stock = incoming.Stock;
+            product.Name = request.Name;
+            product.Category = request.Category;
+            product.Price = request.Price;
+            product.Stock = request.Stock;
+            product.IsActive = request.IsActive;
 
             await _db.SaveChangesAsync();
-            return Ok(product);
+
+            return Ok(new ProductResponse
+            {
+                Id = product.Id,
+                Name = product.Name,
+                Category = product.Category,
+                Price = product.Price,
+                Stock = product.Stock,
+                IsActive = product.IsActive,
+                ImageUrl = product.ImageUrl
+            });
         }
 
+        // ---------------------------
+        // Deactivate product (SuperAdmin)
+        // ---------------------------
+        [Authorize(Roles = "SuperAdmin")]
         [HttpDelete("{id:guid}")]
-        [Authorize]
         public async Task<IActionResult> Delete(Guid id)
         {
             var product = await _db.Products.FindAsync(id);
@@ -93,11 +146,14 @@ namespace ManokshaApi.Controllers
 
             product.IsActive = false;
             await _db.SaveChangesAsync();
-            return Ok(new { message = "Product deactivated successfully." });
+            return Ok(new { message = "Product deactivated" });
         }
 
+        // ---------------------------
+        // Toggle active state (SuperAdmin)
+        // ---------------------------
+        [Authorize(Roles = "SuperAdmin")]
         [HttpPatch("{id:guid}/active")]
-        [Authorize]
         public async Task<IActionResult> SetActiveState(Guid id, [FromQuery] bool isActive)
         {
             var product = await _db.Products.FindAsync(id);
@@ -107,15 +163,5 @@ namespace ManokshaApi.Controllers
             await _db.SaveChangesAsync();
             return NoContent();
         }
-    }
-
-    public class ProductUploadRequest
-    {
-        public string Name { get; set; }
-        public string Category { get; set; }
-        public decimal Price { get; set; }
-        public int Stock { get; set; }
-        public bool IsActive { get; set; }
-        public IFormFile File { get; set; }
     }
 }

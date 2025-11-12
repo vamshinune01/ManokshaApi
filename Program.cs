@@ -8,20 +8,28 @@ using System.Text;
 
 var builder = WebApplication.CreateBuilder(args);
 
+// ---------------------------
+// 1️⃣ Add Services
+// ---------------------------
 builder.Services.AddControllers().AddNewtonsoftJson();
 
-// DbContext
+// SQL Server DB Context
 builder.Services.AddDbContext<AppDbContext>(options =>
     options.UseSqlServer(builder.Configuration.GetConnectionString("DefaultConnection")));
 
-// Services
+// Dependency Injection for Services
+builder.Services.AddScoped<IProductService, ProductService>();
 builder.Services.AddScoped<IEmailService, SmtpEmailService>();
 builder.Services.AddScoped<ISmsService, SmsService>();
-builder.Services.AddScoped<FirebaseStorageService>();
-builder.Services.AddScoped<JwtService>();
+builder.Services.AddScoped<IPaymentService, RazorpayServiceStub>();
+builder.Services.AddSingleton<FirebaseStorageService>();
 
-// JWT Config
-var jwtKey = Environment.GetEnvironmentVariable("JWT_SECRET_KEY") ?? throw new Exception("JWT_SECRET_KEY not found");
+// ---------------------------
+// 2️⃣ JWT Authentication
+// ---------------------------
+var jwtKey = Environment.GetEnvironmentVariable("JWT_SECRET_KEY")
+             ?? throw new Exception("JWT_SECRET_KEY not found");
+
 var key = Encoding.ASCII.GetBytes(jwtKey);
 
 builder.Services.AddAuthentication(options =>
@@ -43,19 +51,25 @@ builder.Services.AddAuthentication(options =>
     };
 });
 
-// Swagger
+// ---------------------------
+// 3️⃣ Swagger / OpenAPI
+// ---------------------------
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen(c =>
 {
     c.SwaggerDoc("v1", new OpenApiInfo { Title = "Manoksha API", Version = "v1" });
 
+    // JWT Bearer Authentication
     c.AddSecurityDefinition("Bearer", new OpenApiSecurityScheme
     {
-        In = ParameterLocation.Header,
-        Description = "Enter 'Bearer {token}'",
         Name = "Authorization",
-        Type = SecuritySchemeType.ApiKey
+        Type = SecuritySchemeType.ApiKey,
+        Scheme = "Bearer",
+        BearerFormat = "JWT",
+        In = ParameterLocation.Header,
+        Description = "Enter 'Bearer {token}'"
     });
+
     c.AddSecurityRequirement(new OpenApiSecurityRequirement
     {
         {
@@ -63,18 +77,42 @@ builder.Services.AddSwaggerGen(c =>
             {
                 Reference = new OpenApiReference { Type = ReferenceType.SecurityScheme, Id = "Bearer" }
             },
-            new string[] {}
+            Array.Empty<string>()
         }
     });
 });
 
+// ---------------------------
+// 4️⃣ CORS (optional for frontend)
+// ---------------------------
+builder.Services.AddCors(options =>
+{
+    options.AddDefaultPolicy(policy =>
+    {
+        policy.AllowAnyHeader()
+              .AllowAnyMethod()
+              .AllowAnyOrigin();
+    });
+});
+
 var app = builder.Build();
-app.UseSwagger();
-app.UseSwaggerUI();
+
+// ---------------------------
+// 5️⃣ Middleware
+// ---------------------------
+if (app.Environment.IsDevelopment())
+{
+    app.UseSwagger();
+    app.UseSwaggerUI();
+}
 
 app.UseHttpsRedirection();
+
+app.UseCors();
+
 app.UseAuthentication();
 app.UseAuthorization();
 
 app.MapControllers();
+
 app.Run();
